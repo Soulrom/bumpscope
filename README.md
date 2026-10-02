@@ -11,7 +11,7 @@
 </div>
 
 > [!WARNING]
-> This project is in early development and is not usable yet. Follow the [roadmap](#roadmap) for progress.
+> This project is in early development. The `diff` command works today. The `check` command, which compares changes with your own code, is still being built. Follow the [roadmap](#roadmap) for progress.
 
 ## Why
 
@@ -21,9 +21,39 @@ So you either read every changelog, or you upgrade and hope the tests catch it.
 
 `bumpscope` compares what a library changed with what your project actually uses, and reports only the overlap.
 
-## Example
+## What works today
 
-Illustrative output, showing the planned interface:
+`bumpscope diff` shows the breaking API changes between two versions of a package. It downloads both versions from PyPI and compares them statically, without installing or running them.
+
+```bash
+git clone https://github.com/Soulrom/bumpscope.git
+cd bumpscope
+uv sync
+uv run bumpscope diff httpx 0.24.1 0.28.0
+```
+
+Real output, shortened:
+
+```text
+httpx 0.24.1 -> 0.28.0
+
+PARAMETER WAS REMOVED
+  httpx._api.get(cert)
+  httpx._api.get(proxies)
+  httpx._client.Client.__init__(app)
+  httpx._client.Client.__init__(proxies)
+  ...
+
+POSITIONAL PARAMETER WAS MOVED
+  httpx._config.create_ssl_context(cert)
+  httpx._config.create_ssl_context(verify)
+
+29 breaking changes
+```
+
+## Where this is going
+
+The goal is a single command that reads your project and reports only the changes that touch your code. Planned interface, not implemented yet:
 
 ```text
 $ bumpscope check
