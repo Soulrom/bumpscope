@@ -60,13 +60,12 @@ $ bumpscope check
 
 14 updates available
 
-AFFECTS YOUR CODE (2)
-  pydantic 1.10.13 -> 2.9.0
-    src/app/models.py:14    @validator is deprecated, use @field_validator
+AFFECTS YOUR CODE (1)
   httpx 0.24.1 -> 0.28.0
     src/app/client.py:31    'proxies' argument was removed
+    tests/conftest.py:12    'app' argument was removed
 
-SAFE TO UPGRADE (12)
+NO IMPACT FOUND (13)
   rich, click, pytest, ...
 ```
 
@@ -88,6 +87,11 @@ flowchart LR
 - **Read-only.** bumpscope never edits your code or your dependency files. It reports, you decide.
 - **Static analysis first.** The core works without any AI. An LLM is optional and only adds what static analysis cannot see, such as behavior changes described in a changelog.
 - **Measured, not claimed.** Accuracy will be reported on real dependency update pull requests from open-source projects.
+
+## Limitations
+
+- **Method calls on instances are not analyzed.** bumpscope follows names you import, such as `httpx.get(...)` or `Client(...)`, but not calls on objects, such as `c = httpx.Client(); c.get(...)`. It can miss impacts, so "no impact found" never means an update is safe.
+- **Only breaking API changes are detected.** Deprecations and behavior changes that keep the same signatures are not reported.
 
 ## Roadmap
 
