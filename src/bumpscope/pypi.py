@@ -2,8 +2,10 @@ import zipfile
 from pathlib import Path
 
 import httpx
+from packaging.version import InvalidVersion, Version
 
 PYPI_URL = "https://pypi.org/pypi/{package}/{version}/json"
+PYPI_PACKAGE_URL = "https://pypi.org/pypi/{package}/json"
 
 
 class PackageNotFoundError(Exception):
@@ -23,6 +25,28 @@ def _wheel_url(package: str, version: str) -> str:
     # A pure-Python wheel contains all the source we need. Prefer it when present.
     pure = [w for w in wheels if w["filename"].endswith("-none-any.whl")]
     return (pure or wheels)[0]["url"]
+
+
+def latest_version(package: str) -> str:
+    """Return the newest release, skipping pre-releases and releases with only yanked files."""
+    response = httpx.get(PYPI_PACKAGE_URL.format(package=package), timeout=30)
+    if response.status_code == 404:
+        raise PackageNotFoundError(f"{package} was not found on PyPI")
+    response.raise_for_status()
+
+    # Keep the text as PyPI spells it: the per-version URL needs it, not the normalised form.
+    versions: dict[Version, str] = {}
+    for text, files in response.json()["releases"].items():
+        try:
+            version = Version(text)
+        except InvalidVersion:
+            continue
+        if version.is_prerelease or all(f.get("yanked") for f in files):
+            continue
+        versions[version] = text
+    if not versions:
+        raise PackageNotFoundError(f"{package} has no stable release on PyPI")
+    return versions[max(versions)]
 
 
 def download(package: str, version: str, target: Path) -> Path:

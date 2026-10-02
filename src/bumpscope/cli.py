@@ -1,10 +1,12 @@
 from itertools import groupby
+from pathlib import Path
+from typing import Annotated, NoReturn
 
 import typer
 from rich.console import Console
 from rich.markup import escape
 
-from bumpscope import apidiff, pypi
+from bumpscope import apidiff, impact, project, pypi, usages
 
 app = typer.Typer(help="See which dependency updates actually affect your Python code.")
 console = Console(highlight=False, soft_wrap=True)
@@ -13,10 +15,17 @@ console = Console(highlight=False, soft_wrap=True)
 EXIT_FOUND = 1
 EXIT_ERROR = 2
 
+# `check` follows imported names only, so it can miss impacts. Say so whenever nothing matched.
+LIMITATION = "method calls on instances are not analyzed"
 
-@app.callback()
-def main() -> None:
-    """Keep `bumpscope <command>` form even while there is a single command."""
+
+def _count(items: list, noun: str) -> str:
+    return f"{len(items)} {noun}{'' if len(items) == 1 else 's'}"
+
+
+def _fail(error: Exception) -> NoReturn:
+    console.print(f"[red]Error:[/red] {escape(str(error))}")
+    raise typer.Exit(code=EXIT_ERROR) from error
 
 
 @app.command()
@@ -26,8 +35,7 @@ def diff(package: str, old_version: str, new_version: str) -> None:
         with console.status(f"Comparing {package} {old_version} and {new_version}..."):
             changes = apidiff.diff(package, old_version, new_version)
     except pypi.PackageNotFoundError as error:
-        console.print(f"[red]Error:[/red] {error}")
-        raise typer.Exit(code=EXIT_ERROR) from error
+        _fail(error)
 
     console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
     if not changes:
@@ -42,5 +50,67 @@ def diff(package: str, old_version: str, new_version: str) -> None:
                 console.print(f"  {escape(label)}{suffix}")
         console.print()
 
-    console.print(f"{len(changes)} breaking changes")
+    console.print(_count(changes, "breaking change"))
+    raise typer.Exit(code=EXIT_FOUND)
+
+
+@app.command()
+def check(
+    package: str,
+    project_dir: Annotated[
+        Path,
+        typer.Option("--project", help="The project to check.", exists=True, file_okay=False),
+    ] = Path("."),
+    from_version: Annotated[
+        str | None,
+        typer.Option("--from", help="Installed version. Default: read from the project's .venv."),
+    ] = None,
+    to_version: Annotated[
+        str | None,
+        typer.Option("--to", help="Target version. Default: the latest stable release."),
+    ] = None,
+) -> None:
+    """Show which breaking changes in a package update affect your code."""
+    project_dir = project_dir.resolve()
+    try:
+        old_version = from_version or project.installed_version(project_dir, package)
+        new_version = to_version or pypi.latest_version(package)
+        if old_version == new_version:
+            console.print(f"{package} {old_version} is already the target version.")
+            return
+        with console.status(f"Comparing {package} {old_version} and {new_version}..."):
+            changes = apidiff.diff(package, old_version, new_version)
+    except (pypi.PackageNotFoundError, project.ProjectError) as error:
+        _fail(error)
+
+    header = f"{package} {old_version} -> {new_version}"
+    if not changes:
+        console.print(f"{header}: no breaking API changes found.")
+        return
+
+    roots = {
+        path.split(".", 1)[0]
+        for change in changes
+        for path in (*change.public_paths, change.definition_path)
+    }
+    with console.status(f"Scanning {project_dir}..."):
+        found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
+    impacts = impact.find_impacts(changes, found)
+
+    if not impacts:
+        changed = _count(changes, "breaking change")
+        console.print(f"{header}: {changed}, none matched in your code ({LIMITATION})")
+        return
+
+    console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
+    for kind, group in groupby(impacts, key=lambda i: i.change.kind):
+        console.print(f"[bold yellow]{kind.upper()}[/bold yellow]")
+        for item in group:
+            location = f"{item.usage.file.as_posix()}:{item.usage.line}"
+            console.print(f"  {escape(location)}  {escape(item.label)}")
+        console.print()
+
+    console.print(
+        f"{_count(impacts, 'impact')} from {_count(changes, 'breaking change')} ({LIMITATION})"
+    )
     raise typer.Exit(code=EXIT_FOUND)
