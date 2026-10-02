@@ -60,3 +60,45 @@ def test_wheel_url_without_wheel(monkeypatch):
 
     with pytest.raises(pypi.PackageNotFoundError, match="no wheel"):
         pypi._wheel_url("demo", "1.0")
+
+
+def _fake_releases(monkeypatch, status_code: int, releases: dict[str, list[dict]]) -> None:
+    def get(url: str, **kwargs) -> httpx.Response:
+        return httpx.Response(
+            status_code, json={"releases": releases}, request=httpx.Request("GET", url)
+        )
+
+    monkeypatch.setattr(pypi.httpx, "get", get)
+
+
+def test_latest_version_skips_prereleases_yanked_and_empty(monkeypatch):
+    ok = [{"yanked": False}]
+    _fake_releases(
+        monkeypatch,
+        200,
+        {
+            "1.9": ok,
+            "1.10": ok,
+            "2.0rc1": ok,
+            "2.0.dev3": ok,
+            "1.11": [{"yanked": True}],
+            "1.12": [],
+            "not-a-version": ok,
+        },
+    )
+
+    assert pypi.latest_version("demo") == "1.10"
+
+
+def test_latest_version_unknown_package(monkeypatch):
+    _fake_releases(monkeypatch, 404, {})
+
+    with pytest.raises(pypi.PackageNotFoundError, match="demo was not found"):
+        pypi.latest_version("demo")
+
+
+def test_latest_version_without_stable_release(monkeypatch):
+    _fake_releases(monkeypatch, 200, {"1.0b1": [{"yanked": False}]})
+
+    with pytest.raises(pypi.PackageNotFoundError, match="no stable release"):
+        pypi.latest_version("demo")
