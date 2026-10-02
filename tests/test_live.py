@@ -9,6 +9,6 @@ from bumpscope import apidiff
 def test_httpx_proxies_parameter_was_removed():
     changes = apidiff.diff("httpx", "0.24.1", "0.28.0")
 
-    removed = {c.path for c in changes if c.kind == "Parameter was removed"}
-    assert any(path.endswith(".get(proxies)") for path in removed)
-    assert any(path.endswith("Client.__init__(proxies)") for path in removed)
+    removed = {label for c in changes if c.kind == "Parameter was removed" for label in c.labels()}
+    assert "httpx.get(proxies)" in removed
+    assert "httpx.Client(proxies)" in removed

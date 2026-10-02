@@ -38,15 +38,15 @@ Real output, shortened:
 httpx 0.24.1 -> 0.28.0
 
 PARAMETER WAS REMOVED
-  httpx._api.get(cert)
-  httpx._api.get(proxies)
-  httpx._client.Client.__init__(app)
-  httpx._client.Client.__init__(proxies)
+  httpx.Client(app)
+  httpx.Client(proxies)
+  httpx.get(cert)
+  httpx.get(proxies)
   ...
 
 POSITIONAL PARAMETER WAS MOVED
-  httpx._config.create_ssl_context(cert)
-  httpx._config.create_ssl_context(verify)
+  httpx.create_ssl_context(cert)
+  httpx.create_ssl_context(verify)
 
 29 breaking changes
 ```

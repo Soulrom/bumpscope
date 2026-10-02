@@ -9,6 +9,10 @@ from bumpscope import apidiff, pypi
 app = typer.Typer(help="See which dependency updates actually affect your Python code.")
 console = Console(highlight=False, soft_wrap=True)
 
+# Shared by all commands: 0 nothing found, 1 something found, 2 error.
+EXIT_FOUND = 1
+EXIT_ERROR = 2
+
 
 @app.callback()
 def main() -> None:
@@ -23,7 +27,7 @@ def diff(package: str, old_version: str, new_version: str) -> None:
             changes = apidiff.diff(package, old_version, new_version)
     except pypi.PackageNotFoundError as error:
         console.print(f"[red]Error:[/red] {error}")
-        raise typer.Exit(code=1) from error
+        raise typer.Exit(code=EXIT_ERROR) from error
 
     console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
     if not changes:
@@ -34,7 +38,9 @@ def diff(package: str, old_version: str, new_version: str) -> None:
         console.print(f"[bold yellow]{kind.upper()}[/bold yellow]")
         for change in group:
             suffix = f"  [dim]{escape(change.details)}[/dim]" if change.details else ""
-            console.print(f"  {escape(change.path)}{suffix}")
+            for label in change.labels():
+                console.print(f"  {escape(label)}{suffix}")
         console.print()
 
     console.print(f"{len(changes)} breaking changes")
+    raise typer.Exit(code=EXIT_FOUND)
