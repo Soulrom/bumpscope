@@ -1,6 +1,6 @@
 <div align="center">
 
-# bumpscope
+# BUMPSCOPE
 
 **See which dependency updates actually affect your Python code, before you upgrade.**
 
