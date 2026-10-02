@@ -5,7 +5,7 @@ from griffe import BreakageKind, ParameterKind
 from bumpscope.apidiff import MODULE_REMOVED, Change, Parameter
 from bumpscope.usages import Usage
 
-# Matched by any reference: an import, an attribute access or a call.
+# Matched by any reference: an import, attribute access or a call.
 ANY_REFERENCE = {
     BreakageKind.OBJECT_REMOVED,
     BreakageKind.OBJECT_CHANGED_KIND,

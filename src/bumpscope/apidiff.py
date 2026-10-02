@@ -2,8 +2,10 @@ import logging
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import griffe
+from griffe import Alias, Object
 
 from bumpscope import pypi
 
@@ -21,7 +23,9 @@ class Parameter:
     name: str
     # Position and kind in the old signature, or in the new one for a parameter that is new.
     index: int
-    kind: griffe.ParameterKind
+    # griffe allows a parameter without a kind. Matching then treats it as neither positional
+    # nor keyword, so it never counts as passed.
+    kind: griffe.ParameterKind | None
     # Set only when the parameter kind was changed.
     new_kind: griffe.ParameterKind | None = None
 
@@ -40,7 +44,9 @@ class Change:
         return [path.removesuffix(".__init__") + suffix for path in self.public_paths]
 
 
-def _shorten(value: object) -> str:
+def _shorten(value: Any) -> str:
+    # `value` is a griffe breakage value (an expression, string, list of bases, or kind),
+    # typed `Any` in griffe. All of them have a readable `str`.
     if isinstance(value, list):
         text = "[" + ", ".join(str(item) for item in value) + "]"
     else:
@@ -64,8 +70,9 @@ def _paths(obj: griffe.Object | griffe.Alias) -> set[str]:
         # A removed re-export: only its own path is gone, its target may still exist.
         return {obj.path}
     paths = {obj.path, *obj.aliases}
-    if obj.parent is not None:
-        paths |= {f"{parent}.{obj.name}" for parent in _paths(obj.parent)}
+    parent = obj.parent
+    if parent is not None:
+        paths |= {f"{path}.{obj.name}" for path in _paths(parent)}
     return paths
 
 
@@ -110,7 +117,7 @@ def _explain(breakage: griffe.Breakage) -> Change:
     )
 
 
-def _load(module: str, directory: Path) -> griffe.Object:
+def _load(module: str, directory: Path) -> Object | Alias:
     # allow_inspection=False: read the source only, never import or run package code.
     # resolve_aliases: record every re-export on the object, so changes get public paths.
     return griffe.load(

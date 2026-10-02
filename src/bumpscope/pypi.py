@@ -9,7 +9,7 @@ PYPI_PACKAGE_URL = "https://pypi.org/pypi/{package}/json"
 
 
 class PackageNotFoundError(Exception):
-    """The package or version does not exist on PyPI, or has no wheel."""
+    """The package or version does not exist on PyPI or has no wheel."""
 
 
 def _wheel_url(package: str, version: str) -> str:
@@ -34,7 +34,7 @@ def latest_version(package: str) -> str:
         raise PackageNotFoundError(f"{package} was not found on PyPI")
     response.raise_for_status()
 
-    # Keep the text as PyPI spells it: the per-version URL needs it, not the normalised form.
+    # Keep the text as PyPI spells it: the per-version URL needs it, not the normalized form.
     versions: dict[Version, str] = {}
     for text, files in response.json()["releases"].items():
         try:

@@ -8,7 +8,7 @@ SKIPPED_DIRS = {"build", "dist", "__pycache__"}
 
 
 class ProjectError(Exception):
-    """The checked project cannot tell us what we need, e.g. it has no `.venv`."""
+    """The checked project cannot tell us what we need, e.g., it has no `.venv`."""
 
 
 def _normalize(name: str) -> str:

@@ -42,7 +42,7 @@ def diff(package: str, old_version: str, new_version: str) -> None:
         console.print("[green]No breaking API changes found.[/green]")
         return
 
-    for kind, group in groupby(changes, key=lambda change: change.kind):
+    for kind, group in groupby(changes, key=lambda c: c.kind):
         console.print(f"[bold yellow]{kind.upper()}[/bold yellow]")
         for change in group:
             suffix = f"  [dim]{escape(change.details)}[/dim]" if change.details else ""
