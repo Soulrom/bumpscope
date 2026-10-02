@@ -1,6 +1,6 @@
 <div align="center">
 
-# BUMPSCOPE
+<img src="assets/banner.png" alt="bumpscope" width="100%">
 
 **See which dependency updates actually affect your Python code, before you upgrade.**
 
