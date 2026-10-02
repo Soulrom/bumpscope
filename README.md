@@ -4,6 +4,7 @@
 
 **See which dependency updates actually affect your Python code, before you upgrade.**
 
+[![CI](https://github.com/Soulrom/bumpscope/actions/workflows/ci.yml/badge.svg)](https://github.com/Soulrom/bumpscope/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
 [![Status](https://img.shields.io/badge/status-early%20development-orange.svg)](#roadmap)
@@ -123,7 +124,7 @@ flowchart LR
 
 ## Roadmap
 
-- [ ] **v0.1** CLI for a single package, report in the terminal
+- [x] **v0.1** CLI for a single package, report in the terminal
 - [ ] **v0.2** All project dependencies, Markdown report
 - [ ] **v0.3** Scheduled runs and chat notifications
 - [ ] **v0.4** Accuracy measured on real update pull requests
@@ -137,6 +138,18 @@ flowchart LR
 ## Contributing
 
 Issues and pull requests are welcome. For larger changes, please open an issue first to discuss the idea.
+
+Before opening a pull request, run the same checks as CI:
+
+```bash
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+Tests run offline by default. Tests that download real packages from PyPI are marked `network`. Run them with `uv run pytest -m network`.
+
+The domain terms are defined in [`CONTEXT.md`](CONTEXT.md), and the design of `check` is in [`docs/design/check-v0.1.md`](docs/design/check-v0.1.md).
 
 ## License
 
