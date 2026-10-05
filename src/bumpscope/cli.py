@@ -1,3 +1,4 @@
+from collections.abc import Iterable
 from itertools import groupby
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -40,6 +41,25 @@ def _status(message: str) -> Status:
     return console.status(message, spinner=spinner)
 
 
+def _print_title(package: str, old_version: str, new_version: str) -> None:
+    console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
+
+
+def _print_groups(groups: Iterable[tuple[str, list[str]]]) -> None:
+    """Print each group as a yellow title, then its lines indented. Lines are rich markup."""
+    for title, lines in groups:
+        console.print(f"[bold yellow]{title.upper()}[/bold yellow]")
+        for line in lines:
+            console.print(f"  {line}")
+        console.print()
+
+
+def _change_lines(change: apidiff.Change) -> list[str]:
+    """One line per public path, with old -> new details dimmed when there are any."""
+    details = f"  [dim]{escape(change.details)}[/dim]" if change.details else ""
+    return [escape(label) + details for label in change.labels()]
+
+
 def _fail(error: Exception) -> NoReturn:
     console.print(f"[red]Error:[/red] {escape(str(error))}")
     raise typer.Exit(code=EXIT_ERROR) from error
@@ -54,19 +74,15 @@ def diff(package: str, old_version: str, new_version: str) -> None:
     except pypi.PackageNotFoundError as error:
         _fail(error)
 
-    console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
+    _print_title(package, old_version, new_version)
     if not changes:
         console.print("[green]No breaking API changes found.[/green]")
         return
 
-    for kind, group in groupby(changes, key=lambda c: c.kind):
-        console.print(f"[bold yellow]{kind.upper()}[/bold yellow]")
-        for change in group:
-            suffix = f"  [dim]{escape(change.details)}[/dim]" if change.details else ""
-            for label in change.labels():
-                console.print(f"  {escape(label)}{suffix}")
-        console.print()
-
+    _print_groups(
+        (kind, [line for change in group for line in _change_lines(change)])
+        for kind, group in groupby(changes, key=lambda c: c.kind)
+    )
     console.print(_count(changes, "breaking change"))
     raise typer.Exit(code=EXIT_FOUND)
 
@@ -105,11 +121,7 @@ def check(
         console.print(f"{header}: no breaking API changes found.")
         return
 
-    roots = {
-        path.split(".", 1)[0]
-        for change in changes
-        for path in (*change.public_paths, change.definition_path)
-    }
+    roots = {target.split(".", 1)[0] for change in changes for target in change.targets()}
     with _status(f"Scanning {project_dir}..."):
         found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
     impacts = impact.find_impacts(changes, found)
@@ -119,14 +131,11 @@ def check(
         console.print(f"{header}: {changed}, none matched in your code ({LIMITATION})")
         return
 
-    console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
-    for kind, group in groupby(impacts, key=lambda i: i.change.kind):
-        console.print(f"[bold yellow]{kind.upper()}[/bold yellow]")
-        for item in group:
-            location = f"{item.usage.file.as_posix()}:{item.usage.line}"
-            console.print(f"  {escape(location)}  {escape(item.label)}")
-        console.print()
-
+    _print_title(package, old_version, new_version)
+    _print_groups(
+        (kind, [escape(f"{i.usage.file.as_posix()}:{i.usage.line}  {i.label}") for i in group])
+        for kind, group in groupby(impacts, key=lambda i: i.change.kind)
+    )
     console.print(
         f"{_count(impacts, 'impact')} from {_count(changes, 'breaking change')} ({LIMITATION})"
     )

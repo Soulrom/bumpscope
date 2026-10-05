@@ -146,3 +146,19 @@ def test_changes_are_sorted_by_kind_then_label(publish):
     changes = apidiff.diff("demo", "1.0", "2.0")
 
     assert [c.labels() for c in changes] == [["demo.a(x)"], ["demo.b(x)"], ["demo.gone"]]
+
+
+def test_targets_are_every_path_a_usage_can_name():
+    change = Change(
+        kind="Parameter was removed",
+        public_paths=("demo.Client.__init__", "demo.api.Client.__init__"),
+        definition_path="demo._client.Client.__init__",
+    )
+
+    assert change.targets() == ["demo.Client", "demo.api.Client", "demo._client.Client"]
+
+
+def test_targets_are_deduplicated():
+    change = Change(kind="Public object was removed", public_paths=("x",), definition_path="x")
+
+    assert change.targets() == ["x"]

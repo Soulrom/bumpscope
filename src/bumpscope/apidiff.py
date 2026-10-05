@@ -43,6 +43,14 @@ class Change:
         suffix = f"({self.parameter.name})" if self.parameter else ""
         return [path.removesuffix(".__init__") + suffix for path in self.public_paths]
 
+    def targets(self) -> list[str]:
+        """Every path code can name the changed object by: public paths, then the definition path.
+
+        A change to `__init__` is used through the class call, so `X.__init__` becomes `X`.
+        """
+        paths = dict.fromkeys([*self.public_paths, self.definition_path])
+        return [path.removesuffix(".__init__") for path in paths]
+
 
 def _shorten(value: Any) -> str:
     # `value` is a griffe breakage value (an expression, string, list of bases, or kind),
@@ -64,7 +72,7 @@ def _is_public(path: str) -> bool:
     )
 
 
-def _paths(obj: griffe.Object | griffe.Alias) -> set[str]:
+def _paths(obj: Object | Alias) -> set[str]:
     """Every dotted path the object can be reached by: its own, re-exports, and via its parents."""
     if obj.is_alias:
         # A removed re-export: only its own path is gone, its target may still exist.
@@ -76,7 +84,7 @@ def _paths(obj: griffe.Object | griffe.Alias) -> set[str]:
     return paths
 
 
-def _public_paths(obj: griffe.Object | griffe.Alias) -> tuple[str, ...]:
+def _public_paths(obj: Object | Alias) -> tuple[str, ...]:
     public = sorted(path for path in _paths(obj) if _is_public(path))
     return tuple(public) or (obj.path,)
 
