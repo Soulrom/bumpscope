@@ -5,6 +5,8 @@ from typing import Annotated, NoReturn
 import typer
 from rich.console import Console
 from rich.markup import escape
+from rich.spinner import SPINNERS
+from rich.status import Status
 
 from bumpscope import apidiff, impact, project, pypi, usages
 
@@ -23,6 +25,21 @@ def _count(items: list, noun: str) -> str:
     return f"{len(items)} {noun}{'' if len(items) == 1 else 's'}"
 
 
+def _status(message: str) -> Status:
+    """A spinner that the console can actually print.
+
+    The default spinner draws braille characters. On Windows, output sent to `NUL` (and old
+    cp1252 consoles) claims to be a terminal that cannot encode them, and the spinner crashed
+    with UnicodeEncodeError. Fall back to an ASCII spinner there.
+    """
+    spinner = "dots"
+    try:
+        "".join(SPINNERS[spinner]["frames"]).encode(console.encoding)
+    except UnicodeEncodeError:
+        spinner = "line"
+    return console.status(message, spinner=spinner)
+
+
 def _fail(error: Exception) -> NoReturn:
     console.print(f"[red]Error:[/red] {escape(str(error))}")
     raise typer.Exit(code=EXIT_ERROR) from error
@@ -32,7 +49,7 @@ def _fail(error: Exception) -> NoReturn:
 def diff(package: str, old_version: str, new_version: str) -> None:
     """Show breaking API changes between two versions of a package."""
     try:
-        with console.status(f"Comparing {package} {old_version} and {new_version}..."):
+        with _status(f"Comparing {package} {old_version} and {new_version}..."):
             changes = apidiff.diff(package, old_version, new_version)
     except pypi.PackageNotFoundError as error:
         _fail(error)
@@ -78,7 +95,7 @@ def check(
         if old_version == new_version:
             console.print(f"{package} {old_version} is already the target version.")
             return
-        with console.status(f"Comparing {package} {old_version} and {new_version}..."):
+        with _status(f"Comparing {package} {old_version} and {new_version}..."):
             changes = apidiff.diff(package, old_version, new_version)
     except (pypi.PackageNotFoundError, project.ProjectError) as error:
         _fail(error)
@@ -93,7 +110,7 @@ def check(
         for change in changes
         for path in (*change.public_paths, change.definition_path)
     }
-    with console.status(f"Scanning {project_dir}..."):
+    with _status(f"Scanning {project_dir}..."):
         found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
     impacts = impact.find_impacts(changes, found)
 

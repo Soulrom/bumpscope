@@ -1,8 +1,26 @@
+import io
+
+from rich.console import Console
 from typer.testing import CliRunner
 
+from bumpscope import cli
 from bumpscope.cli import app
 
 runner = CliRunner()
+
+
+def test_spinner_works_on_a_terminal_that_cannot_encode_it(publish, monkeypatch):
+    # On Windows, `bumpscope ... > NUL` looks like a cp1252 terminal. The braille spinner
+    # used to crash there with UnicodeEncodeError instead of finishing.
+    publish("1.0", {"demo/__init__.py": "def get(url): ...\n"})
+    publish("2.0", {"demo/__init__.py": "def get(url): ...\n"})
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(cli, "console", Console(file=stream, force_terminal=True))
+
+    result = runner.invoke(app, ["diff", "demo", "1.0", "2.0"])
+
+    assert result.exception is None
+    assert result.exit_code == 0
 
 
 def test_diff_prints_changes_grouped_by_kind(publish):
