@@ -12,13 +12,19 @@ class PackageNotFoundError(Exception):
     """The package or version does not exist on PyPI or has no wheel."""
 
 
-def _wheel_url(package: str, version: str) -> str:
-    response = httpx.get(PYPI_URL.format(package=package, version=version), timeout=30)
+def _get_json(url: str, name: str) -> dict:
+    """Fetch PyPI JSON. A 404 means `name` (a package, or package and version) does not exist."""
+    response = httpx.get(url, timeout=30)
     if response.status_code == 404:
-        raise PackageNotFoundError(f"{package} {version} was not found on PyPI")
+        raise PackageNotFoundError(f"{name} was not found on PyPI")
     response.raise_for_status()
+    return response.json()
 
-    wheels = [f for f in response.json()["urls"] if f["packagetype"] == "bdist_wheel"]
+
+def _wheel_url(package: str, version: str) -> str:
+    data = _get_json(PYPI_URL.format(package=package, version=version), f"{package} {version}")
+
+    wheels = [f for f in data["urls"] if f["packagetype"] == "bdist_wheel"]
     if not wheels:
         raise PackageNotFoundError(f"{package} {version} has no wheel on PyPI")
 
@@ -29,14 +35,11 @@ def _wheel_url(package: str, version: str) -> str:
 
 def latest_version(package: str) -> str:
     """Return the newest release, skipping pre-releases and releases with only yanked files."""
-    response = httpx.get(PYPI_PACKAGE_URL.format(package=package), timeout=30)
-    if response.status_code == 404:
-        raise PackageNotFoundError(f"{package} was not found on PyPI")
-    response.raise_for_status()
+    data = _get_json(PYPI_PACKAGE_URL.format(package=package), package)
 
     # Keep the text as PyPI spells it: the per-version URL needs it, not the normalized form.
     versions: dict[Version, str] = {}
-    for text, files in response.json()["releases"].items():
+    for text, files in data["releases"].items():
         try:
             version = Version(text)
         except InvalidVersion:

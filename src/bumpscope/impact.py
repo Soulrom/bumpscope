@@ -24,12 +24,6 @@ class Impact:
     label: str
 
 
-def _targets(change: Change) -> list[str]:
-    # A change to `__init__` is used through the class call.
-    paths = dict.fromkeys([*change.public_paths, change.definition_path])
-    return [path.removesuffix(".__init__") for path in paths]
-
-
 def _position(change: Change, parameter: Parameter) -> int:
     # Calling the class passes `self` implicitly, so `__init__(self, app)` takes `app` first.
     implicit_self = change.definition_path.endswith(".__init__")
@@ -72,7 +66,7 @@ def _affects(change: Change, usage: Usage) -> bool:
 
 def _match(change: Change, usage: Usage) -> str | None:
     """Return the changed path the usage refers to, or None."""
-    for target in _targets(change):
+    for target in change.targets():
         if usage.path == target:
             return target
         # Using `demo.Client.send` also uses `demo.Client`, so it counts if `Client` was removed.
