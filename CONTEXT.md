@@ -13,7 +13,18 @@ _Avoid_: library, distribution
 An importable top-level name that a Package provides, e.g. `yaml` from PyYAML.
 
 **Dependency**:
-A Package that the checked project declares.
+A Package that the checked project declares. A full check does not go by Dependencies: it
+covers Imported packages, which may include undeclared Packages and leave out declared ones the
+code never imports.
+
+**Imported package**:
+A Package installed in the checked project's environment that provides a Module the project's
+code imports. These are the Packages a full check covers, whether declared or not.
+
+**Unchecked package**:
+An Imported package that could not be compared, with the reason, e.g. not on PyPI, no wheel,
+or not installed from PyPI. An Unchecked package is never reported as "no impact found".
+_Avoid_: skipped, ignored, failed package
 
 **From version**:
 The version of a Package installed in the checked project's environment.

@@ -82,7 +82,7 @@ POSITIONAL PARAMETER WAS MOVED
 
 ## Where this is going
 
-Today `check` looks at one package. The goal is to check every dependency of your project in one run. Planned interface, not implemented yet:
+Today `check` looks at one package. v0.2 checks every package your code imports in one run, and adds a Markdown report for CI summaries and pull request comments. Planned interface, not implemented yet:
 
 ```text
 $ bumpscope check
@@ -91,12 +91,20 @@ $ bumpscope check
 
 AFFECTS YOUR CODE (1)
   httpx 0.24.1 -> 0.28.0
-    src/app/client.py:31    'proxies' argument was removed
-    tests/conftest.py:12    'app' argument was removed
+    PARAMETER WAS REMOVED
+      src/app/client.py:31  httpx.Client(proxies)
+      tests/conftest.py:12  httpx.Client(app)
 
-NO IMPACT FOUND (13)
-  rich, click, pytest, ...
+COULD NOT CHECK (1)
+  internal-sdk 2.1.0: not installed from PyPI
+
+NO IMPACT FOUND (12)
+  rich 13.7.0 -> 15.0.0, click 8.1.7 -> 8.3.0, ...
+
+(method calls on instances are not analyzed)
 ```
+
+The full design is in [`docs/design/check-v0.2.md`](docs/design/check-v0.2.md).
 
 ## How it works
 
@@ -121,11 +129,12 @@ flowchart LR
 
 - **Method calls on instances are not analyzed.** bumpscope follows names you import, such as `httpx.get(...)` or `Client(...)`, but not calls on objects, such as `c = httpx.Client(); c.get(...)`. It can miss impacts, so "no impact found" never means an update is safe.
 - **Only breaking API changes are detected.** Deprecations and behavior changes that keep the same signatures are not reported.
+- **Packages from private indexes are compared against PyPI.** bumpscope cannot tell a package installed from a private index apart from one installed from PyPI. If PyPI has an unrelated package with the same name, the results for it are wrong. Packages installed from git, a URL or a local path are recognized and not compared.
 
 ## Roadmap
 
 - [x] **v0.1** CLI for a single package, report in the terminal
-- [ ] **v0.2** All project dependencies, Markdown report
+- [ ] **v0.2** Every package your code imports in one run, Markdown report ([milestone](https://github.com/Soulrom/bumpscope/milestone/1))
 - [ ] **v0.3** Scheduled runs and chat notifications
 - [ ] **v0.4** Accuracy measured on real update pull requests
 
