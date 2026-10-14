@@ -37,4 +37,4 @@ addopts = "-m 'not network'"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B"]
+select = ["E", "W", "F", "I", "UP", "B"]

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Exit code: `1` if anything is affected, otherwise `2` if anything could not be checked,
   otherwise `0`.
 - `--from` and `--to` without a package are a usage error (exit code 2).
+- `check --format markdown` prints the report as Markdown for CI job summaries and pull
+  request comments: one table per affected package, COULD NOT CHECK expanded, NO IMPACT FOUND
+  collapsed. Capped at about 60,000 characters, trimming whole rows and ending with
+  "and N more". stdout is written as UTF-8, so redirecting it works with any locale.
 
 ### Changed
 
