@@ -41,17 +41,21 @@ uv run bumpscope check httpx --project path/to/your/project
 Real output, for a project that calls `httpx.Client(proxies=...)`:
 
 ```text
-httpx 0.24.1 -> 0.28.0
+1 update available
 
-PARAMETER WAS REMOVED
-  app/client.py:5  httpx.Client(proxies)
+AFFECTS YOUR CODE (1)
+  httpx 0.24.1 -> 0.28.0
+    PARAMETER WAS REMOVED
+      app/client.py:5  httpx.Client(proxies)
 
-1 impact from 29 breaking changes (method calls on instances are not analyzed)
+(method calls on instances are not analyzed)
 ```
 
-Use `--from` and `--to` to choose the versions yourself, for example when the project has no `.venv`. When nothing matches, `check` says so, never that the update is safe: see [limitations](#limitations).
+Use `--from` and `--to` to choose the versions yourself, for example when the project has no `.venv`. When nothing matches, `check` lists the package under NO IMPACT FOUND, never says that the update is safe: see [limitations](#limitations). A package that cannot be compared, for example because the version is missing on PyPI or the download fails, is listed under COULD NOT CHECK with the reason.
 
-Exit codes, for scripts and CI: `0` nothing found, `1` impacts found, `2` error.
+The report goes to stdout; progress and errors go to stderr, so `bumpscope check httpx > report.txt` captures only the report.
+
+Exit codes, for scripts and CI: `0` nothing found, `1` impacts found, `2` a package could not be checked or the command failed.
 
 ### `diff`: every breaking change between two versions
 

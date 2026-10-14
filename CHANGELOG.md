@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `check PACKAGE` prints the new report layout, which a run over many packages will share:
+  an update count, then the sections AFFECTS YOUR CODE (by package, then by change kind),
+  COULD NOT CHECK, NO IMPACT FOUND, an up-to-date count, and the limitation note, which is
+  now always printed.
+- A package that cannot be compared is reported under COULD NOT CHECK with the reason and
+  exit code 2, instead of as an error: a version missing on PyPI, a network failure, a broken
+  wheel or a parse error. Before, anything but a missing version crashed with a traceback and
+  exit code 1, which read as "impacts found".
+- Progress and error messages go to stderr; the report stays on stdout, for both `diff` and
+  `check`. Redirecting stdout now captures only the report.
+
+### Fixed
+
+- `check` treats versions spelled differently as the same version (`2.0` and `2.0.0`), so the
+  package counts as up to date instead of being downloaded and compared with itself.
+
 ## [0.1.0] - 2026-10-14
 
 First release. Published on GitHub only, not on PyPI.
