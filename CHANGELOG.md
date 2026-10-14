@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `bumpscope check` with no package checks every package your code imports, in parallel, and
+  prints one report. Packages are found through the code's imports, not dependency files
+  (ADR 0001). A failure in one package lists it under COULD NOT CHECK and the run goes on.
+  Exit code: `1` if anything is affected, otherwise `2` if anything could not be checked,
+  otherwise `0`.
+- `--from` and `--to` without a package are a usage error (exit code 2).
+
 ### Changed
 
 - `check PACKAGE` prints the new report layout, which a run over many packages will share:

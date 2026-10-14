@@ -109,9 +109,10 @@ class _Visitor(ast.NodeVisitor):
 
 
 def _parse(file: Path) -> ast.Module | None:
+    """The file's syntax tree, or None if it cannot be read or does not parse."""
     try:
         return ast.parse(file.read_bytes(), filename=str(file))
-    except (SyntaxError, ValueError):
+    except (OSError, SyntaxError, ValueError):
         return None
 
 

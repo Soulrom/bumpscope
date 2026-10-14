@@ -7,7 +7,7 @@ from packaging.version import Version
 
 from bumpscope import pypi
 
-Publish = Callable[[str, dict[str, str]], None]
+Publish = Callable[..., None]
 
 
 @pytest.fixture
@@ -15,24 +15,30 @@ def publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Publish:
     """Fake PyPI. `publish(version, files)` makes a version whose wheel unpacks to `files`.
 
     `files` maps paths inside the wheel to source, e.g. {"demo/__init__.py": "def f(a): ..."}.
+    Without `package`, the version is served for any package name; pass `package` to publish
+    several packages side by side.
     """
-    published: dict[str, Path] = {}
+    published: dict[tuple[str | None, str], Path] = {}
 
-    def _publish(version: str, files: dict[str, str]) -> None:
-        unpacked = tmp_path / "wheels" / version
+    def _publish(version: str, files: dict[str, str], package: str | None = None) -> None:
+        unpacked = tmp_path / "wheels" / (package or "any") / version
         for name, source in files.items():
             path = unpacked / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(source, encoding="utf-8")
-        published[version] = unpacked
+        published[(package, version)] = unpacked
 
     def _download(package: str, version: str, target: Path) -> Path:
-        if version not in published:
-            raise pypi.PackageNotFoundError(f"{package} {version} was not found on PyPI")
-        return published[version]
+        for key in ((package, version), (None, version)):
+            if key in published:
+                return published[key]
+        raise pypi.PackageNotFoundError(f"{package} {version} was not found on PyPI")
 
     def _latest_version(package: str) -> str:
-        return max(published, key=Version)
+        versions = [v for p, v in published if p in (package, None)]
+        if not versions:
+            raise pypi.PackageNotFoundError(f"{package} was not found on PyPI")
+        return max(versions, key=Version)
 
     monkeypatch.setattr(pypi, "download", _download)
     monkeypatch.setattr(pypi, "latest_version", _latest_version)
@@ -74,6 +80,9 @@ def make_project(tmp_path: Path) -> MakeProject:
                 (dist_info / "METADATA").write_text(
                     f"Metadata-Version: 2.1\nName: {package}\nVersion: {version}\n"
                 )
+                # The package provides the module of its own name, as most packages do.
+                module = package.replace("-", "_").lower()
+                (dist_info / "RECORD").write_text(f"{module}/__init__.py,,\n")
                 if direct_urls and package in direct_urls:
                     (dist_info / "direct_url.json").write_text(json.dumps(direct_urls[package]))
         return root
