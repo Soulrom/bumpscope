@@ -32,11 +32,14 @@ uv sync
 
 ### `check`: what an update breaks in your code
 
-`bumpscope check` takes one package, finds the version installed in your project's `.venv`, compares it with the latest release on PyPI, and reports the places in your code that the breaking changes touch.
+`bumpscope check` finds the packages your code imports, reads the versions installed in your project's `.venv`, compares each with its latest release on PyPI, and reports the places in your code that the breaking changes touch. Packages are checked in parallel.
 
 ```bash
-uv run bumpscope check httpx --project path/to/your/project
+uv run bumpscope check --project path/to/your/project        # every imported package
+uv run bumpscope check httpx --project path/to/your/project  # one package
 ```
+
+Which packages are checked is decided by your imports, not by your dependency files: a package your code never imports cannot break it. Packages installed from git, a URL or a local path are not compared against PyPI and are listed under COULD NOT CHECK. See [ADR 0001](docs/adr/0001-check-imported-packages.md).
 
 Real output, for a project that calls `httpx.Client(proxies=...)`:
 
@@ -51,7 +54,7 @@ AFFECTS YOUR CODE (1)
 (method calls on instances are not analyzed)
 ```
 
-Use `--from` and `--to` to choose the versions yourself, for example when the project has no `.venv`. When nothing matches, `check` lists the package under NO IMPACT FOUND, never says that the update is safe: see [limitations](#limitations). A package that cannot be compared, for example because the version is missing on PyPI or the download fails, is listed under COULD NOT CHECK with the reason.
+Use `--from` and `--to` with a package name to choose its versions yourself, for example when the project has no `.venv`. When nothing matches, `check` lists the package under NO IMPACT FOUND, never says that the update is safe: see [limitations](#limitations). A package that cannot be compared, for example because the version is missing on PyPI or the download fails, is listed under COULD NOT CHECK with the reason.
 
 The report goes to stdout; progress and errors go to stderr, so `bumpscope check httpx > report.txt` captures only the report.
 
@@ -86,7 +89,7 @@ POSITIONAL PARAMETER WAS MOVED
 
 ## Where this is going
 
-Today `check` looks at one package. v0.2 checks every package your code imports in one run, and adds a Markdown report for CI summaries and pull request comments. Planned interface, not implemented yet:
+`check` already covers every package your code imports. Still to come in v0.2: a Markdown report for CI summaries and pull request comments. A full run in the terminal looks like this:
 
 ```text
 $ bumpscope check

@@ -139,3 +139,11 @@ def test_nested_import_inside_a_guarded_try_is_optional(tmp_path):
     source = "try:\n    if True:\n        import ujson\nexcept ImportError:\n    pass\n"
 
     assert _imported(tmp_path, source) == [("ujson", 3, True)]
+
+
+def test_files_that_cannot_be_read_are_skipped(tmp_path):
+    # A file can vanish or be unreadable between the directory walk and the parse.
+    gone = tmp_path / "gone.py"
+
+    assert imported_modules([gone], tmp_path) == []
+    assert find_usages([gone], {"httpx"}, tmp_path) == []

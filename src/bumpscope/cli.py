@@ -1,3 +1,6 @@
+from collections import defaultdict
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import groupby
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -24,6 +27,12 @@ app = typer.Typer(help="See which dependency updates actually affect your Python
 # The report goes to stdout; progress and errors go to stderr, so the report can be redirected.
 console = Console(highlight=False, soft_wrap=True)
 err_console = Console(stderr=True, highlight=False, soft_wrap=True)
+
+# Packages checked at the same time in a full check. Most of the time goes to downloads.
+WORKERS = 8
+
+# Finds the Usages of the given top-level modules in the project.
+Scan = Callable[[set[str]], list[usages.Usage]]
 
 
 def _status(message: str) -> Status:
@@ -79,14 +88,38 @@ def diff(package: str, old_version: str, new_version: str) -> None:
     raise typer.Exit(code=EXIT_FOUND)
 
 
-def _check_package(
+def _compare(package: str, old_version: str, to_version: str | None, scan: Scan) -> PackageResult:
+    """Fetch, compare and match one package against the project's code.
+
+    A failure of the package itself (missing on PyPI, network, broken wheel, griffe) makes it
+    an Unchecked package with the reason. Matching against the project runs outside that net:
+    a problem there is not the package's fault. Safe to run in a thread: `apidiff.diff`
+    downloads into its own temp directories and loads with its own griffe calls, and `scan`
+    only reads.
+    """
+    new_version = to_version
+    try:
+        new_version = new_version or pypi.latest_version(package)
+        if same_version(old_version, new_version):
+            return PackageResult(package, old_version, new_version)
+        changes = apidiff.diff(package, old_version, new_version)
+    except pypi.PackageNotFoundError as error:
+        return PackageResult(package, old_version, new_version, reason=str(error))
+    except Exception as error:  # noqa: BLE001 - one package's failure must not stop the run
+        reason = f"{type(error).__name__}: {error}"
+        return PackageResult(package, old_version, new_version, reason=reason)
+
+    if not changes:
+        return PackageResult(package, old_version, new_version)
+    roots = {target.split(".", 1)[0] for change in changes for target in change.targets()}
+    impacts = impact.find_impacts(changes, scan(roots))
+    return PackageResult(package, old_version, new_version, impacts=tuple(impacts))
+
+
+def _check_one(
     package: str, project_dir: Path, from_version: str | None, to_version: str | None
 ) -> PackageResult:
-    """Compare one package and match its breaking changes against the project's code.
-
-    Any failure while fetching or comparing the package (missing on PyPI, network, broken
-    wheel, griffe) makes it an Unchecked package with the reason. A project problem, such as no
-    `.venv`, raises `ProjectError`.
+    """`check PACKAGE`. A project problem, such as no `.venv`, raises `ProjectError`.
 
     When the installed version is read from `.venv`, a package not installed from PyPI (git, a
     URL, a local path or an editable install) is not compared: PyPI may host an unrelated
@@ -99,32 +132,60 @@ def _check_package(
                 package, installed.version, to_version, reason=environment.NOT_FROM_PYPI
             )
         from_version = installed.version
-    old_version = from_version
-    new_version = to_version
-    try:
-        new_version = new_version or pypi.latest_version(package)
-        if same_version(old_version, new_version):
-            return PackageResult(package, old_version, new_version)
-        with _status(f"Comparing {package} {old_version} and {new_version}..."):
-            changes = apidiff.diff(package, old_version, new_version)
-    except pypi.PackageNotFoundError as error:
-        return PackageResult(package, old_version, new_version, reason=str(error))
-    except Exception as error:  # noqa: BLE001 - one package's failure must not stop the run
-        reason = f"{type(error).__name__}: {error}"
-        return PackageResult(package, old_version, new_version, reason=reason)
 
-    if not changes:
-        return PackageResult(package, old_version, new_version)
-    roots = {target.split(".", 1)[0] for change in changes for target in change.targets()}
-    with _status(f"Scanning {project_dir}..."):
-        found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
-    impacts = impact.find_impacts(changes, found)
-    return PackageResult(package, old_version, new_version, impacts=tuple(impacts))
+    def scan(roots: set[str]) -> list[usages.Usage]:
+        # Only reached when there are changes to match, so an up-to-date package skips the walk.
+        return usages.find_usages(project.python_files(project_dir), roots, project_dir)
+
+    with _status(f"Checking {package}..."):
+        return _compare(package, from_version, to_version, scan)
+
+
+def _check_all(project_dir: Path) -> list[PackageResult]:
+    """`check` with no package: every Imported package, in a thread pool.
+
+    The project is read once, before the pool starts: its imports, the packages they come
+    from, and the Usages of all of them. The workers only read that scan.
+    """
+    with _status("Finding imported packages...") as status:
+        installed = environment.installed_packages(project_dir)
+        files = project.python_files(project_dir)
+        imports = usages.imported_modules(files, project_dir)
+        found = environment.imported_packages(project_dir, installed, imports)
+        roots = {
+            module.split(".", 1)[0] for package in found.to_check for module in package.modules
+        }
+        # Grouped by top-level module, so each package is matched only against its own Usages.
+        by_root: dict[str, list[usages.Usage]] = defaultdict(list)
+        for usage in usages.find_usages(files, roots, project_dir):
+            by_root[usage.path.split(".", 1)[0]].append(usage)
+
+        def scan(package_roots: set[str]) -> list[usages.Usage]:
+            return [usage for root in package_roots for usage in by_root.get(root, [])]
+
+        results = [PackageResult(p.name, p.version, reason=r) for p, r in found.unchecked]
+        total = len(found.to_check)
+        status.update(f"Checking {count(total, 'package')}...")
+        pool = ThreadPoolExecutor(max_workers=WORKERS)
+        try:
+            futures = {
+                pool.submit(_compare, p.name, p.version, None, scan): p for p in found.to_check
+            }
+            for done, future in enumerate(as_completed(futures), start=1):
+                results.append(future.result())
+                status.update(f"Checking {done}/{total}: {futures[future].name}")
+        finally:
+            # On Ctrl+C or an error, drop the queued packages instead of waiting for them all.
+            pool.shutdown(wait=False, cancel_futures=True)
+    return results
 
 
 @app.command()
 def check(
-    package: str,
+    package: Annotated[
+        str | None,
+        typer.Argument(help="One package to check. Default: every package your code imports."),
+    ] = None,
     project_dir: Annotated[
         Path,
         typer.Option("--project", help="The project to check.", exists=True, file_okay=False),
@@ -138,12 +199,19 @@ def check(
         typer.Option("--to", help="Target version. Default: the latest stable release."),
     ] = None,
 ) -> None:
-    """Show which breaking changes in a package update affect your code."""
+    """Show which breaking changes in your package updates affect your code."""
+    if package is None and (from_version or to_version):
+        _fail(ValueError("--from and --to need a PACKAGE: they set the versions of one package."))
+
+    project_dir = project_dir.resolve()
     try:
-        result = _check_package(package, project_dir.resolve(), from_version, to_version)
+        if package is None:
+            results = _check_all(project_dir)
+        else:
+            results = [_check_one(package, project_dir, from_version, to_version)]
     except project.ProjectError as error:
         _fail(error)
 
-    report = Report((result,))
+    report = Report(tuple(results))
     render_text(report, console)
     raise typer.Exit(code=report.exit_code())
