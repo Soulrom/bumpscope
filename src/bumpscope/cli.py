@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 from itertools import groupby
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -10,24 +9,25 @@ from rich.spinner import SPINNERS
 from rich.status import Status
 
 from bumpscope import apidiff, impact, project, pypi, usages
+from bumpscope.report import (
+    EXIT_ERROR,
+    EXIT_FOUND,
+    PackageResult,
+    Report,
+    count,
+    print_groups,
+    render_text,
+    same_version,
+)
 
 app = typer.Typer(help="See which dependency updates actually affect your Python code.")
+# The report goes to stdout; progress and errors go to stderr, so the report can be redirected.
 console = Console(highlight=False, soft_wrap=True)
-
-# Shared by all commands: 0 nothing found, 1 something found, 2 error.
-EXIT_FOUND = 1
-EXIT_ERROR = 2
-
-# `check` follows imported names only, so it can miss impacts. Say so whenever nothing matched.
-LIMITATION = "method calls on instances are not analyzed"
-
-
-def _count(items: list, noun: str) -> str:
-    return f"{len(items)} {noun}{'' if len(items) == 1 else 's'}"
+err_console = Console(stderr=True, highlight=False, soft_wrap=True)
 
 
 def _status(message: str) -> Status:
-    """A spinner that the console can actually print.
+    """A spinner on stderr that the console can actually print.
 
     The default spinner draws braille characters. On Windows, output sent to `NUL` (and old
     cp1252 consoles) claims to be a terminal that cannot encode them, and the spinner crashed
@@ -35,23 +35,10 @@ def _status(message: str) -> Status:
     """
     spinner = "dots"
     try:
-        "".join(SPINNERS[spinner]["frames"]).encode(console.encoding)
+        "".join(SPINNERS[spinner]["frames"]).encode(err_console.encoding)
     except UnicodeEncodeError:
         spinner = "line"
-    return console.status(message, spinner=spinner)
-
-
-def _print_title(package: str, old_version: str, new_version: str) -> None:
-    console.print(f"\n[bold]{package}[/bold] {old_version} -> {new_version}\n")
-
-
-def _print_groups(groups: Iterable[tuple[str, list[str]]]) -> None:
-    """Print each group as a yellow title, then its lines indented. Lines are rich markup."""
-    for title, lines in groups:
-        console.print(f"[bold yellow]{title.upper()}[/bold yellow]")
-        for line in lines:
-            console.print(f"  {line}")
-        console.print()
+    return err_console.status(message, spinner=spinner)
 
 
 def _change_lines(change: apidiff.Change) -> list[str]:
@@ -61,7 +48,7 @@ def _change_lines(change: apidiff.Change) -> list[str]:
 
 
 def _fail(error: Exception) -> NoReturn:
-    console.print(f"[red]Error:[/red] {escape(str(error))}")
+    err_console.print(f"[red]Error:[/red] {escape(str(error))}")
     raise typer.Exit(code=EXIT_ERROR) from error
 
 
@@ -74,17 +61,54 @@ def diff(package: str, old_version: str, new_version: str) -> None:
     except pypi.PackageNotFoundError as error:
         _fail(error)
 
-    _print_title(package, old_version, new_version)
+    console.print(
+        f"\n[bold]{escape(package)}[/bold] {escape(old_version)} -> {escape(new_version)}\n"
+    )
     if not changes:
         console.print("[green]No breaking API changes found.[/green]")
         return
 
-    _print_groups(
-        (kind, [line for change in group for line in _change_lines(change)])
-        for kind, group in groupby(changes, key=lambda c: c.kind)
+    print_groups(
+        console,
+        (
+            (kind, [line for change in group for line in _change_lines(change)])
+            for kind, group in groupby(changes, key=lambda c: c.kind)
+        ),
     )
-    console.print(_count(changes, "breaking change"))
+    console.print(count(len(changes), "breaking change"))
     raise typer.Exit(code=EXIT_FOUND)
+
+
+def _check_package(
+    package: str, project_dir: Path, from_version: str | None, to_version: str | None
+) -> PackageResult:
+    """Compare one package and match its breaking changes against the project's code.
+
+    Any failure while fetching or comparing the package (missing on PyPI, network, broken
+    wheel, griffe) makes it an Unchecked package with the reason. A project problem, such as no
+    `.venv`, raises `ProjectError`.
+    """
+    old_version = from_version or project.installed_version(project_dir, package)
+    new_version = to_version
+    try:
+        new_version = new_version or pypi.latest_version(package)
+        if same_version(old_version, new_version):
+            return PackageResult(package, old_version, new_version)
+        with _status(f"Comparing {package} {old_version} and {new_version}..."):
+            changes = apidiff.diff(package, old_version, new_version)
+    except pypi.PackageNotFoundError as error:
+        return PackageResult(package, old_version, new_version, reason=str(error))
+    except Exception as error:  # noqa: BLE001 - one package's failure must not stop the run
+        reason = f"{type(error).__name__}: {error}"
+        return PackageResult(package, old_version, new_version, reason=reason)
+
+    if not changes:
+        return PackageResult(package, old_version, new_version)
+    roots = {target.split(".", 1)[0] for change in changes for target in change.targets()}
+    with _status(f"Scanning {project_dir}..."):
+        found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
+    impacts = impact.find_impacts(changes, found)
+    return PackageResult(package, old_version, new_version, impacts=tuple(impacts))
 
 
 @app.command()
@@ -104,39 +128,11 @@ def check(
     ] = None,
 ) -> None:
     """Show which breaking changes in a package update affect your code."""
-    project_dir = project_dir.resolve()
     try:
-        old_version = from_version or project.installed_version(project_dir, package)
-        new_version = to_version or pypi.latest_version(package)
-        if old_version == new_version:
-            console.print(f"{package} {old_version} is already the target version.")
-            return
-        with _status(f"Comparing {package} {old_version} and {new_version}..."):
-            changes = apidiff.diff(package, old_version, new_version)
-    except (pypi.PackageNotFoundError, project.ProjectError) as error:
+        result = _check_package(package, project_dir.resolve(), from_version, to_version)
+    except project.ProjectError as error:
         _fail(error)
 
-    header = f"{package} {old_version} -> {new_version}"
-    if not changes:
-        console.print(f"{header}: no breaking API changes found.")
-        return
-
-    roots = {target.split(".", 1)[0] for change in changes for target in change.targets()}
-    with _status(f"Scanning {project_dir}..."):
-        found = usages.find_usages(project.python_files(project_dir), roots, project_dir)
-    impacts = impact.find_impacts(changes, found)
-
-    if not impacts:
-        changed = _count(changes, "breaking change")
-        console.print(f"{header}: {changed}, none matched in your code ({LIMITATION})")
-        return
-
-    _print_title(package, old_version, new_version)
-    _print_groups(
-        (kind, [escape(f"{i.usage.file.as_posix()}:{i.usage.line}  {i.label}") for i in group])
-        for kind, group in groupby(impacts, key=lambda i: i.change.kind)
-    )
-    console.print(
-        f"{_count(impacts, 'impact')} from {_count(changes, 'breaking change')} ({LIMITATION})"
-    )
-    raise typer.Exit(code=EXIT_FOUND)
+    report = Report((result,))
+    render_text(report, console)
+    raise typer.Exit(code=report.exit_code())

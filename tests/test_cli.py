@@ -1,5 +1,6 @@
 import io
 
+import httpx
 from rich.console import Console
 from typer.testing import CliRunner
 
@@ -15,7 +16,7 @@ def test_spinner_works_on_a_terminal_that_cannot_encode_it(publish, monkeypatch)
     publish("1.0", {"demo/__init__.py": "def get(url): ...\n"})
     publish("2.0", {"demo/__init__.py": "def get(url): ...\n"})
     stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
-    monkeypatch.setattr(cli, "console", Console(file=stream, force_terminal=True))
+    monkeypatch.setattr(cli, "err_console", Console(file=stream, force_terminal=True))
 
     result = runner.invoke(app, ["diff", "demo", "1.0", "2.0"])
 
@@ -30,10 +31,10 @@ def test_diff_prints_changes_grouped_by_kind(publish):
     result = runner.invoke(app, ["diff", "demo", "1.0", "2.0"])
 
     assert result.exit_code == 1
-    assert "demo 1.0 -> 2.0" in result.output
-    assert "PARAMETER WAS REMOVED\n  demo.get(proxies)" in result.output
-    assert "PUBLIC OBJECT WAS REMOVED\n  demo.gone" in result.output
-    assert "2 breaking changes" in result.output
+    assert "demo 1.0 -> 2.0" in result.stdout
+    assert "PARAMETER WAS REMOVED\n  demo.get(proxies)" in result.stdout
+    assert "PUBLIC OBJECT WAS REMOVED\n  demo.gone" in result.stdout
+    assert "2 breaking changes" in result.stdout
 
 
 def test_diff_prints_one_line_per_public_path(publish):
@@ -44,8 +45,8 @@ def test_diff_prints_one_line_per_public_path(publish):
 
     result = runner.invoke(app, ["diff", "demo", "1.0", "2.0"])
 
-    assert "  demo.fetch(proxies)\n  demo.get(proxies)\n" in result.output
-    assert "1 breaking change\n" in result.output
+    assert "  demo.fetch(proxies)\n  demo.get(proxies)\n" in result.stdout
+    assert "1 breaking change\n" in result.stdout
 
 
 def test_diff_without_changes(publish):
@@ -55,16 +56,17 @@ def test_diff_without_changes(publish):
     result = runner.invoke(app, ["diff", "demo", "1.0", "2.0"])
 
     assert result.exit_code == 0
-    assert "No breaking API changes found." in result.output
+    assert "No breaking API changes found." in result.stdout
 
 
-def test_diff_unknown_version(publish):
+def test_diff_unknown_version_is_an_error_on_stderr(publish):
     publish("1.0", {"demo/__init__.py": ""})
 
     result = runner.invoke(app, ["diff", "demo", "1.0", "9.9"])
 
     assert result.exit_code == 2
-    assert "demo 9.9 was not found on PyPI" in result.output
+    assert result.stdout == ""
+    assert "demo 9.9 was not found on PyPI" in result.stderr
 
 
 OLD = {"demo/__init__.py": "def get(url, proxies=None): ...\ndef gone(): ...\n"}
@@ -85,21 +87,18 @@ def test_check_reports_impacts(publish, make_project):
     result = runner.invoke(app, ["check", "demo", "--project", str(root)])
 
     assert result.exit_code == 1
-    assert "demo 1.0 -> 2.0" in result.output
-    assert "PARAMETER WAS REMOVED\n  app/client.py:3  demo.get(proxies)\n" in result.output
-    assert "PUBLIC OBJECT WAS REMOVED\n  app/old.py:1  demo.gone\n" in result.output
-    assert "2 impacts from 2 breaking changes" in result.output
-
-
-def test_check_counts_are_singular_for_one(publish, make_project):
-    publish("1.0", {"demo/__init__.py": "def gone(): ...\n"})
-    publish("2.0", {"demo/__init__.py": ""})
-    root = make_project({"app.py": "from demo import gone\n"}, installed={"demo": "1.0"})
-
-    result = runner.invoke(app, ["check", "demo", "--project", str(root)])
-
-    assert "1 impact from 1 breaking change (" in result.output
-    assert "method calls on instances are not analyzed" in result.output
+    assert result.stdout == (
+        "1 update available\n"
+        "\n"
+        "AFFECTS YOUR CODE (1)\n"
+        "  demo 1.0 -> 2.0\n"
+        "    PARAMETER WAS REMOVED\n"
+        "      app/client.py:3  demo.get(proxies)\n"
+        "    PUBLIC OBJECT WAS REMOVED\n"
+        "      app/old.py:1  demo.gone\n"
+        "\n"
+        "(method calls on instances are not analyzed)\n"
+    )
 
 
 def test_check_without_impacts_never_says_safe(publish, make_project):
@@ -110,11 +109,26 @@ def test_check_without_impacts_never_says_safe(publish, make_project):
     result = runner.invoke(app, ["check", "demo", "--project", str(root)])
 
     assert result.exit_code == 0
-    assert (
-        "demo 1.0 -> 2.0: 2 breaking changes, none matched in your code "
-        "(method calls on instances are not analyzed)"
-    ) in result.output
+    assert result.stdout == (
+        "1 update available\n"
+        "\n"
+        "NO IMPACT FOUND (1)\n"
+        "  demo 1.0 -> 2.0\n"
+        "\n"
+        "(method calls on instances are not analyzed)\n"
+    )
     assert "safe" not in result.output.lower()
+
+
+def test_check_without_breaking_changes_is_no_impact(publish, make_project):
+    publish("1.0", NEW)
+    publish("2.0", NEW)
+    root = make_project({"app.py": "import demo\n"}, installed={"demo": "1.0"})
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root)])
+
+    assert result.exit_code == 0
+    assert "NO IMPACT FOUND (1)\n  demo 1.0 -> 2.0\n" in result.stdout
 
 
 def test_check_with_explicit_versions_needs_no_venv(publish, make_project):
@@ -128,18 +142,30 @@ def test_check_with_explicit_versions_needs_no_venv(publish, make_project):
     )
 
     assert result.exit_code == 1
-    assert "demo 1.0 -> 2.0" in result.output
+    assert "  demo 1.0 -> 2.0\n" in result.stdout
 
 
-def test_check_without_venv(publish, make_project):
+def test_check_version_missing_on_pypi_is_unchecked(publish, make_project):
+    publish("1.0", OLD)
+    root = make_project({"app.py": ""}, installed={"demo": "1.0"})
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root), "--to", "9.9"])
+
+    assert result.exit_code == 2
+    assert "  demo 1.0 -> 9.9: demo 9.9 was not found on PyPI\n" in result.stdout
+    assert "Error" not in result.stderr
+
+
+def test_check_without_venv_is_an_error_on_stderr(publish, make_project):
     publish("2.0", NEW)
     root = make_project({"app.py": ""}, installed=None)
 
     result = runner.invoke(app, ["check", "demo", "--project", str(root)])
 
     assert result.exit_code == 2
-    assert "No .venv found" in result.output
-    assert "--from" in result.output
+    assert result.stdout == ""
+    assert "No .venv found" in result.stderr
+    assert "--from" in result.stderr
 
 
 def test_check_already_at_target_version(publish, make_project):
@@ -149,4 +175,35 @@ def test_check_already_at_target_version(publish, make_project):
     result = runner.invoke(app, ["check", "demo", "--project", str(root)])
 
     assert result.exit_code == 0
-    assert "demo 2.0 is already the target version." in result.output
+    assert result.stdout == (
+        "0 updates available\n"
+        "\n"
+        "1 package up to date\n"
+        "(method calls on instances are not analyzed)\n"
+    )
+
+
+def test_check_network_error_is_unchecked_not_a_crash(publish, make_project, monkeypatch):
+    from bumpscope import pypi
+
+    def offline(package: str) -> str:
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(pypi, "latest_version", offline)
+    root = make_project({"app.py": ""}, installed={"demo": "1.0"})
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root)])
+
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert result.exit_code == 2
+    assert "COULD NOT CHECK (1)\n  demo 1.0: ConnectError: connection refused\n" in result.stdout
+
+
+def test_check_equal_versions_spelled_differently_are_up_to_date(publish, make_project):
+    publish("2.0", NEW)
+    root = make_project({"app.py": ""}, installed={"demo": "2.0"})
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root), "--to", "2.0.0"])
+
+    assert result.exit_code == 0
+    assert "1 package up to date\n" in result.stdout
