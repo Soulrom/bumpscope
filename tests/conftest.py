@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -47,9 +48,15 @@ def make_project(tmp_path: Path) -> MakeProject:
 
     `files` maps paths in the project to source. `installed` maps package names to the
     versions recorded in the `.venv`'s dist-info; pass `installed=None` for no `.venv` at all.
+    `direct_urls` maps package names to the `direct_url.json` pip writes for packages not
+    installed from PyPI, e.g. {"demo": {"url": "https://git/demo", "vcs_info": {"vcs": "git"}}}.
     """
 
-    def _make(files: dict[str, str], installed: dict[str, str] | None = None) -> Path:
+    def _make(
+        files: dict[str, str],
+        installed: dict[str, str] | None = None,
+        direct_urls: dict[str, dict] | None = None,
+    ) -> Path:
         root = tmp_path / "project"
         for name, source in files.items():
             path = root / name
@@ -67,6 +74,8 @@ def make_project(tmp_path: Path) -> MakeProject:
                 (dist_info / "METADATA").write_text(
                     f"Metadata-Version: 2.1\nName: {package}\nVersion: {version}\n"
                 )
+                if direct_urls and package in direct_urls:
+                    (dist_info / "direct_url.json").write_text(json.dumps(direct_urls[package]))
         return root
 
     return _make

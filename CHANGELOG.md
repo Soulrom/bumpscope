@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit code 1, which read as "impacts found".
 - Progress and error messages go to stderr; the report stays on stdout, for both `diff` and
   `check`. Redirecting stdout now captures only the report.
+- `check PACKAGE` no longer compares a package installed from git, a URL, a local path or as
+  an editable install against PyPI, which may host an unrelated package with the same name.
+  It is listed under COULD NOT CHECK as "not installed from PyPI". Passing `--from` skips
+  this rule.
 
 ### Fixed
 

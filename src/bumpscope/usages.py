@@ -108,6 +108,13 @@ class _Visitor(ast.NodeVisitor):
             self._reference(node)
 
 
+def _parse(file: Path) -> ast.Module | None:
+    try:
+        return ast.parse(file.read_bytes(), filename=str(file))
+    except (SyntaxError, ValueError):
+        return None
+
+
 def find_usages(files: list[Path], roots: set[str], project: Path) -> list[Usage]:
     """Usages of anything under the top-level modules `roots`, in the given files.
 
@@ -115,11 +122,73 @@ def find_usages(files: list[Path], roots: set[str], project: Path) -> list[Usage
     """
     usages = []
     for file in files:
-        try:
-            tree = ast.parse(file.read_bytes(), filename=str(file))
-        except (SyntaxError, ValueError):
+        tree = _parse(file)
+        if tree is None:
             continue
         visitor = _Visitor(file.relative_to(project), _bindings(tree), roots)
         visitor.visit(tree)
         usages.extend(visitor.usages)
     return usages
+
+
+@dataclass(frozen=True)
+class ImportedModule:
+    # What is imported, as far as the import names it: `google.cloud.storage` for
+    # `from google.cloud import storage`, even though `storage` may be a class, not a module.
+    path: str
+    file: Path
+    line: int
+    # Inside a `try` whose handlers catch ImportError: an optional dependency.
+    optional: bool = False
+
+
+# Handlers that mark an optional dependency. Broad ones (`except Exception:`, a bare
+# `except:`) do not: they usually guard the code around the import, not the import itself.
+_IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+
+
+def _catches_import_error(node: ast.Try | ast.TryStar) -> bool:
+    for handler in node.handlers:
+        if handler.type is None:
+            continue
+        types = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
+        if any(isinstance(t, ast.Name) and t.id in _IMPORT_ERRORS for t in types):
+            return True
+    return False
+
+
+def _collect_imports(node: ast.AST, file: Path, optional: bool, found: list) -> None:
+    if isinstance(node, ast.Import):
+        found.extend(ImportedModule(a.name, file, node.lineno, optional) for a in node.names)
+    elif isinstance(node, ast.ImportFrom):
+        # Relative imports are the project's own code.
+        if node.level == 0 and node.module:
+            found.extend(
+                ImportedModule(
+                    node.module if a.name == "*" else f"{node.module}.{a.name}",
+                    file,
+                    node.lineno,
+                    optional,
+                )
+                for a in node.names
+            )
+    elif isinstance(node, (ast.Try, ast.TryStar)):
+        # Only the `try` body is guarded; imports in handlers, `else` and `finally` are not.
+        guarded = optional or _catches_import_error(node)
+        for child in node.body:
+            _collect_imports(child, file, guarded, found)
+        for child in [*node.handlers, *node.orelse, *node.finalbody]:
+            _collect_imports(child, file, optional, found)
+    else:
+        for child in ast.iter_child_nodes(node):
+            _collect_imports(child, file, optional, found)
+
+
+def imported_modules(files: list[Path], project: Path) -> list[ImportedModule]:
+    """Every absolute import in the given files. Files are reported relative to `project`."""
+    found: list[ImportedModule] = []
+    for file in files:
+        tree = _parse(file)
+        if tree is not None:
+            _collect_imports(tree, file.relative_to(project), False, found)
+    return found

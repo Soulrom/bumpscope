@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from bumpscope.usages import Usage, find_usages
+import pytest
+
+from bumpscope.usages import Usage, find_usages, imported_modules
 
 
 def _usages(tmp_path: Path, source: str, roots: set[str] | None = None) -> list[Usage]:
@@ -78,3 +80,62 @@ def test_other_packages_and_relative_imports_are_ignored(tmp_path):
 
 def test_files_that_do_not_parse_are_skipped(tmp_path):
     assert _usages(tmp_path, "def broken(:\n") == []
+
+
+def _imported(tmp_path: Path, source: str) -> list[tuple[str, int, bool]]:
+    file = tmp_path / "app.py"
+    file.write_text(source, encoding="utf-8")
+    return [(m.path, m.line, m.optional) for m in imported_modules([file], tmp_path)]
+
+
+def test_imported_modules_with_their_full_paths(tmp_path):
+    source = "import os\nimport google.auth as ga\nfrom google.cloud import storage, bigquery\n"
+
+    assert _imported(tmp_path, source) == [
+        ("os", 1, False),
+        ("google.auth", 2, False),
+        ("google.cloud.storage", 3, False),
+        ("google.cloud.bigquery", 3, False),
+    ]
+
+
+def test_star_import_records_the_module(tmp_path):
+    assert _imported(tmp_path, "from httpx import *\n") == [("httpx", 1, False)]
+
+
+def test_relative_imports_are_left_out(tmp_path):
+    assert _imported(tmp_path, "from . import models\nfrom .db import session\n") == []
+
+
+@pytest.mark.parametrize(
+    "handler", ["ImportError", "ModuleNotFoundError", "(ValueError, ImportError)"]
+)
+def test_imports_guarded_by_import_error_are_optional(tmp_path, handler):
+    source = f"try:\n    import ujson\nexcept {handler}:\n    ujson = None\n"
+
+    assert _imported(tmp_path, source) == [("ujson", 2, True)]
+
+
+@pytest.mark.parametrize("handler", ["Exception", "BaseException", ""])
+def test_broad_handlers_do_not_make_an_import_optional(tmp_path, handler):
+    # Design decision 6: only ImportError and ModuleNotFoundError mark an optional dependency.
+    source = f"try:\n    import internal_sdk\nexcept {handler}:\n    pass\n"
+
+    assert _imported(tmp_path, source.replace("except :", "except:")) == [
+        ("internal_sdk", 2, False)
+    ]
+
+
+def test_imports_in_other_try_parts_are_not_optional(tmp_path):
+    source = (
+        "try:\n    pass\nexcept ImportError:\n    import fallback\n"
+        "try:\n    import strict\nexcept ValueError:\n    pass\n"
+    )
+
+    assert _imported(tmp_path, source) == [("fallback", 4, False), ("strict", 6, False)]
+
+
+def test_nested_import_inside_a_guarded_try_is_optional(tmp_path):
+    source = "try:\n    if True:\n        import ujson\nexcept ImportError:\n    pass\n"
+
+    assert _imported(tmp_path, source) == [("ujson", 3, True)]
