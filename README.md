@@ -60,6 +60,16 @@ The report goes to stdout; progress and errors go to stderr, so `bumpscope check
 
 Exit codes, for scripts and CI: `0` nothing found, `1` impacts found, `2` a package could not be checked or the command failed.
 
+#### Markdown report for CI
+
+`--format markdown` prints the report as Markdown, for a GitHub Actions job summary or a pull request comment: one table per affected package, COULD NOT CHECK expanded, NO IMPACT FOUND collapsed. It is capped at about 60,000 characters, the longest lists are trimmed first and end with "and N more".
+
+```yaml
+- run: uv run bumpscope check --format markdown >> "$GITHUB_STEP_SUMMARY"
+```
+
+The step fails when impacts are found (exit code `1`) or a package could not be checked (`2`). Add `continue-on-error: true` to report without failing the job.
+
 ### `diff`: every breaking change between two versions
 
 `bumpscope diff` shows the breaking API changes between two versions of a package. It downloads both versions from PyPI and compares them statically, without installing or running them.
@@ -89,7 +99,7 @@ POSITIONAL PARAMETER WAS MOVED
 
 ## Where this is going
 
-`check` already covers every package your code imports. Still to come in v0.2: a Markdown report for CI summaries and pull request comments. A full run in the terminal looks like this:
+`check` covers every package your code imports, in the terminal or as Markdown. Next on the roadmap: scheduled runs and chat notifications (v0.3). A full run in the terminal looks like this:
 
 ```text
 $ bumpscope check

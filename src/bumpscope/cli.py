@@ -1,6 +1,8 @@
+import sys
 from collections import defaultdict
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from enum import StrEnum
 from itertools import groupby
 from pathlib import Path
 from typing import Annotated, NoReturn
@@ -19,6 +21,7 @@ from bumpscope.report import (
     Report,
     count,
     print_groups,
+    render_markdown,
     render_text,
     same_version,
 )
@@ -35,13 +38,33 @@ WORKERS = 8
 Scan = Callable[[set[str]], list[usages.Usage]]
 
 
-def _status(message: str) -> Status:
-    """A spinner on stderr that the console can actually print.
+class Format(StrEnum):
+    TEXT = "text"
+    MARKDOWN = "markdown"
+
+
+class _NoStatus:
+    """Stands in for a spinner when there must be none, e.g. for a Markdown report."""
+
+    def __enter__(self) -> "_NoStatus":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+    def update(self, message: str) -> None:
+        return None
+
+
+def _status(message: str, show: bool = True) -> Status | _NoStatus:
+    """A spinner on stderr that the console can actually print, or none when `show` is False.
 
     The default spinner draws braille characters. On Windows, output sent to `NUL` (and old
     cp1252 consoles) claims to be a terminal that cannot encode them, and the spinner crashed
     with UnicodeEncodeError. Fall back to an ASCII spinner there.
     """
+    if not show:
+        return _NoStatus()
     spinner = "dots"
     try:
         "".join(SPINNERS[spinner]["frames"]).encode(err_console.encoding)
@@ -54,6 +77,22 @@ def _change_lines(change: apidiff.Change) -> list[str]:
     """One line per public path, with old -> new details dimmed when there are any."""
     details = f"  [dim]{escape(change.details)}[/dim]" if change.details else ""
     return [escape(label) + details for label in change.labels()]
+
+
+def _write_utf8(text: str) -> None:
+    """Write to stdout as UTF-8 with "\\n" line endings, as is: no colors, no wrapping.
+
+    On Windows a redirected stdout uses the locale encoding (e.g. cp1251), which cannot encode
+    the "→" in a Markdown report, and turns "\\n" into "\\r\\n". This runs last, so changing the
+    stream's settings affects nothing else.
+    """
+    stream = sys.stdout
+    if stream is None:  # pythonw and some embeddings have no stdout at all
+        return
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8", newline="\n")
+    stream.write(text)
+    stream.flush()
 
 
 def _fail(error: Exception) -> NoReturn:
@@ -117,7 +156,11 @@ def _compare(package: str, old_version: str, to_version: str | None, scan: Scan)
 
 
 def _check_one(
-    package: str, project_dir: Path, from_version: str | None, to_version: str | None
+    package: str,
+    project_dir: Path,
+    from_version: str | None,
+    to_version: str | None,
+    progress: bool = True,
 ) -> PackageResult:
     """`check PACKAGE`. A project problem, such as no `.venv`, raises `ProjectError`.
 
@@ -137,17 +180,17 @@ def _check_one(
         # Only reached when there are changes to match, so an up-to-date package skips the walk.
         return usages.find_usages(project.python_files(project_dir), roots, project_dir)
 
-    with _status(f"Checking {package}..."):
+    with _status(f"Checking {package}...", show=progress):
         return _compare(package, from_version, to_version, scan)
 
 
-def _check_all(project_dir: Path) -> list[PackageResult]:
+def _check_all(project_dir: Path, progress: bool = True) -> list[PackageResult]:
     """`check` with no package: every Imported package, in a thread pool.
 
     The project is read once, before the pool starts: its imports, the packages they come
     from, and the Usages of all of them. The workers only read that scan.
     """
-    with _status("Finding imported packages...") as status:
+    with _status("Finding imported packages...", show=progress) as status:
         installed = environment.installed_packages(project_dir)
         files = project.python_files(project_dir)
         imports = usages.imported_modules(files, project_dir)
@@ -198,20 +241,31 @@ def check(
         str | None,
         typer.Option("--to", help="Target version. Default: the latest stable release."),
     ] = None,
+    output_format: Annotated[
+        Format,
+        typer.Option("--format", help="text for the terminal, markdown for CI and PR comments."),
+    ] = Format.TEXT,
 ) -> None:
     """Show which breaking changes in your package updates affect your code."""
     if package is None and (from_version or to_version):
         _fail(ValueError("--from and --to need a PACKAGE: they set the versions of one package."))
 
     project_dir = project_dir.resolve()
+    markdown = output_format is Format.MARKDOWN
     try:
         if package is None:
-            results = _check_all(project_dir)
+            results = _check_all(project_dir, progress=not markdown)
         else:
-            results = [_check_one(package, project_dir, from_version, to_version)]
+            results = [_check_one(package, project_dir, from_version, to_version, not markdown)]
     except project.ProjectError as error:
+        if markdown:
+            # CI posts stdout as is: say what went wrong rather than post an empty comment.
+            _write_utf8(f"## bumpscope: could not run\n\n{error}\n")
         _fail(error)
 
     report = Report(tuple(results))
-    render_text(report, console)
+    if markdown:
+        _write_utf8(render_markdown(report))
+    else:
+        render_text(report, console)
     raise typer.Exit(code=report.exit_code())

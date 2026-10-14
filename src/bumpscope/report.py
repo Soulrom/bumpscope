@@ -1,3 +1,4 @@
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cached_property
@@ -161,6 +162,145 @@ def render_text(report: Report, console: Console) -> None:
     console.print(f"({LIMITATION})")
 
 
+def _location(impact: Impact) -> str:
+    return f"{impact.usage.file.as_posix()}:{impact.usage.line}"
+
+
 def _impact_line(impact: Impact) -> str:
-    location = f"{impact.usage.file.as_posix()}:{impact.usage.line}"
-    return escape(f"{location}  {impact.label}")
+    return escape(f"{_location(impact)}  {impact.label}")
+
+
+# GitHub PR comments allow about 65,000 characters; leave room for whatever wraps the report.
+MARKDOWN_LIMIT = 60_000
+
+# Characters that mean something in GitHub Markdown, escaped in free text such as a reason.
+_MARKDOWN_SPECIAL = re.compile(r"([\\`*_{}\[\]<>()#+!|~])")
+
+
+def _cell(text: str) -> str:
+    """Escape `|` so it does not end a table cell, even inside a code span."""
+    return text.replace("|", r"\|")
+
+
+def _md_text(text: str) -> str:
+    """Free text, such as an exception message, as one line of literal Markdown."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", " ".join(text.split()))
+
+
+def _md_range(result: PackageResult) -> str:
+    """`1.0 → 2.0`, `1.0` when the target is unknown, `→ 2.0` when the installed one is."""
+    if result.from_version and result.to_version:
+        return f"{result.from_version} → {result.to_version}"
+    if result.to_version:
+        return f"→ {result.to_version}"
+    return result.from_version or ""
+
+
+def _md_versions(result: PackageResult) -> str:
+    return f"{result.package} {_md_range(result)}".rstrip()
+
+
+def _md_title(report: Report) -> str:
+    updates = len(report.results) - len(report.up_to_date)
+    if report.affected:
+        verb = "affects" if len(report.affected) == 1 else "affect"
+        return f"{len(report.affected)} of {count(updates, 'update')} {verb} your code"
+    if not updates:
+        return "no updates available"
+    # Only packages that were compared count as "no impact found".
+    if not report.no_impact:
+        return f"{count(len(report.unchecked), 'package')} could not be checked"
+    title = f"no impact found in {count(len(report.no_impact), 'update')}"
+    if report.unchecked:
+        title += f", {len(report.unchecked)} could not be checked"
+    return title
+
+
+def _assemble(report: Report, impacts_shown: int, no_impact_shown: int) -> str:
+    """The Markdown report with only the first `impacts_shown` Impact rows and the first
+    `no_impact_shown` NO IMPACT FOUND packages. Everything else is always complete."""
+    lines = [f"## bumpscope: {_md_title(report)}", ""]
+
+    if report.affected:
+        lines += ["### Affects your code", ""]
+        left = impacts_shown
+        for result in report.affected:
+            rows = result.impacts[: max(left, 0)]
+            left -= len(result.impacts)
+            if not rows:
+                continue
+            lines += [
+                f"#### {_md_versions(result)}",
+                "",
+                "| Location | Change | Kind |",
+                "|---|---|---|",
+            ]
+            for i in rows:
+                lines.append(
+                    f"| `{_cell(_location(i))}` | `{_cell(i.label)}` | {_cell(i.change.kind)} |"
+                )
+            lines.append("")
+        hidden = sum(len(r.impacts) for r in report.affected) - impacts_shown
+        if hidden > 0:
+            lines += [f"...and {count(hidden, 'more impact')}.", ""]
+
+    if report.unchecked:
+        lines += ["### Could not check", ""]
+        for result in report.unchecked:
+            versions = _md_range(result)
+            reason = _md_text(str(result.reason))
+            lines.append(f"- `{result.package}`{' ' + versions if versions else ''}: {reason}")
+        lines.append("")
+
+    if report.no_impact:
+        shown = [_md_versions(r) for r in report.no_impact[:no_impact_shown]]
+        hidden = len(report.no_impact) - len(shown)
+        if hidden:
+            shown.append(f"and {hidden} more")
+        summary = f"No impact found ({len(report.no_impact)})"
+        lines += [
+            f"<details><summary>{summary}</summary>",
+            "",
+            ", ".join(shown),
+            "",
+            "</details>",
+            "",
+        ]
+
+    footer = f"{LIMITATION[0].upper()}{LIMITATION[1:]}."
+    if report.up_to_date:
+        footer = f"{count(len(report.up_to_date), 'package')} up to date. {footer}"
+    lines.append(footer)
+    return "\n".join(lines) + "\n"
+
+
+def _most_that_fit(upper: int, fits) -> int:
+    """The largest n in [0, upper] with fits(n), for a `fits` that only gets harder as n grows."""
+    low, high = 0, upper
+    while low < high:
+        middle = (low + high + 1) // 2
+        if fits(middle):
+            low = middle
+        else:
+            high = middle - 1
+    return low
+
+
+def render_markdown(report: Report, limit: int = MARKDOWN_LIMIT) -> str:
+    """The report as Markdown, for CI summaries and PR comments, at most about `limit` long.
+
+    When it is too long, NO IMPACT FOUND is trimmed first, then Impact rows from the end, each
+    ending with "and N more". The title and COULD NOT CHECK are never cut, so the report can
+    still exceed `limit` when they alone do. Only whole rows and list items are dropped.
+    """
+    impacts = sum(len(r.impacts) for r in report.affected)
+    no_impact = len(report.no_impact)
+    full = _assemble(report, impacts, no_impact)
+    if len(full) <= limit:
+        return full
+
+    if len(_assemble(report, impacts, 0)) <= limit:
+        kept = _most_that_fit(no_impact, lambda n: len(_assemble(report, impacts, n)) <= limit)
+        return _assemble(report, impacts, kept)
+    kept = _most_that_fit(impacts, lambda n: len(_assemble(report, n, 0)) <= limit)
+    return _assemble(report, kept, 0)

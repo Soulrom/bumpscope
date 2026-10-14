@@ -178,3 +178,46 @@ def test_each_package_is_matched_only_against_its_own_usages(two_packages, make_
 
     assert "app.py:3  demo.get(proxies)" in result.stdout
     assert "rich.show" not in result.stdout
+
+
+def test_markdown_format(two_packages, make_project):
+    root = make_project(
+        {"app.py": "import demo\nimport rich\ndemo.get('u', proxies=1)\n"},
+        installed={"demo": "1.0", "rich": "13.0"},
+    )
+
+    result = _run(root, "--format", "markdown")
+
+    assert result.exit_code == 1
+    assert result.stdout.startswith("## bumpscope: 1 of 2 updates affects your code\n")
+    assert "| `app.py:3` | `demo.get(proxies)` | Parameter was removed |" in result.stdout
+    assert "\x1b[" not in result.stdout
+    assert result.stderr == ""
+
+
+def test_markdown_format_for_one_package(two_packages, make_project):
+    root = make_project({"app.py": "import rich\n"}, installed={"rich": "13.0"})
+
+    result = runner.invoke(app, ["check", "rich", "--project", str(root), "--format", "markdown"])
+
+    assert result.exit_code == 0
+    assert result.stdout.startswith("## bumpscope: no impact found in 1 update\n")
+
+
+def test_unknown_format_is_a_usage_error(make_project):
+    root = make_project({"app.py": ""}, installed={})
+
+    result = _run(root, "--format", "html")
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+
+
+def test_markdown_project_error_still_writes_markdown(make_project):
+    root = make_project({"app.py": "import demo\n"}, installed=None)
+
+    result = _run(root, "--format", "markdown")
+
+    assert result.exit_code == 2
+    assert result.stdout.startswith("## bumpscope: could not run\n\nNo .venv found")
+    assert "No .venv found" in result.stderr

@@ -1,4 +1,7 @@
 import io
+import os
+import subprocess
+import sys
 
 import httpx
 from rich.console import Console
@@ -254,3 +257,24 @@ def test_check_editable_package_is_not_compared_against_pypi(publish, make_proje
 
     assert result.exit_code == 2
     assert "  demo 1.0: not installed from PyPI\n" in result.stdout
+
+
+def test_markdown_survives_a_redirected_stdout_with_a_legacy_encoding(make_project):
+    # On Windows a redirected stdout uses the locale encoding, e.g. cp1251, which has no "→".
+    # Runs in a real process, because the encoding comes from how Python opens stdout.
+    root = make_project({"app.py": ""}, installed={"demo": "1.0"}, direct_urls=GIT)
+    command = (
+        "from bumpscope.cli import app; "
+        f"app(['check', 'demo', '--project', {str(root)!r}, '--to', '2.0', '--format', 'markdown'])"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", command],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": "cp1251"},
+    )
+
+    assert result.returncode == 2, result.stderr.decode(errors="replace")
+    assert "- `demo` 1.0 → 2.0: not installed from PyPI" in result.stdout.decode("utf-8")
+    # Plain "\n" line endings on every platform, so the report file is the same everywhere.
+    assert b"\r\n" not in result.stdout
