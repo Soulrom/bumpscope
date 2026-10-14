@@ -46,6 +46,8 @@ Existing code to build on:
    - The rule applies whenever the from-version is read from `.venv`, including when only
      `--to` is given.
    - It is skipped only when `--from` is passed explicitly.
+   - In `check PACKAGE`, an editable install is unchecked the same way: the package was asked
+     for by name, so it is reported, not skipped silently as in a full check.
 6. **Package with neither `RECORD` nor `top_level.txt`**: becomes an Unchecked package with the
    reason "cannot tell which modules it provides", but only when the code has an unmatched
    import. An import is not unmatched if it is:

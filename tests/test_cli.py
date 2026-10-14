@@ -207,3 +207,50 @@ def test_check_equal_versions_spelled_differently_are_up_to_date(publish, make_p
 
     assert result.exit_code == 0
     assert "1 package up to date\n" in result.stdout
+
+
+GIT = {"demo": {"url": "https://git.example/demo", "vcs_info": {"vcs": "git"}}}
+
+
+def test_check_package_not_installed_from_pypi_is_unchecked(publish, make_project):
+    publish("1.0", OLD)
+    publish("2.0", NEW)
+    root = make_project({"app.py": "from demo import gone\n"}, {"demo": "1.0"}, direct_urls=GIT)
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root)])
+
+    assert result.exit_code == 2
+    assert "COULD NOT CHECK (1)\n  demo 1.0: not installed from PyPI\n" in result.stdout
+
+
+def test_check_not_from_pypi_holds_with_only_to(publish, make_project):
+    publish("1.0", OLD)
+    publish("2.0", NEW)
+    root = make_project({"app.py": "from demo import gone\n"}, {"demo": "1.0"}, direct_urls=GIT)
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root), "--to", "2.0"])
+
+    assert result.exit_code == 2
+    assert "  demo 1.0 -> 2.0: not installed from PyPI\n" in result.stdout
+
+
+def test_check_explicit_from_skips_the_pypi_origin_rule(publish, make_project):
+    publish("1.0", OLD)
+    publish("2.0", NEW)
+    root = make_project({"app.py": "from demo import gone\n"}, {"demo": "1.0"}, direct_urls=GIT)
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root), "--from", "1.0"])
+
+    assert result.exit_code == 1
+    assert "AFFECTS YOUR CODE (1)" in result.stdout
+
+
+def test_check_editable_package_is_not_compared_against_pypi(publish, make_project):
+    publish("2.0", NEW)
+    editable = {"demo": {"url": "file:///src/demo", "dir_info": {"editable": True}}}
+    root = make_project({"app.py": ""}, {"demo": "1.0"}, direct_urls=editable)
+
+    result = runner.invoke(app, ["check", "demo", "--project", str(root)])
+
+    assert result.exit_code == 2
+    assert "  demo 1.0: not installed from PyPI\n" in result.stdout

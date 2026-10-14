@@ -8,7 +8,7 @@ from rich.markup import escape
 from rich.spinner import SPINNERS
 from rich.status import Status
 
-from bumpscope import apidiff, impact, project, pypi, usages
+from bumpscope import apidiff, environment, impact, project, pypi, usages
 from bumpscope.report import (
     EXIT_ERROR,
     EXIT_FOUND,
@@ -87,8 +87,19 @@ def _check_package(
     Any failure while fetching or comparing the package (missing on PyPI, network, broken
     wheel, griffe) makes it an Unchecked package with the reason. A project problem, such as no
     `.venv`, raises `ProjectError`.
+
+    When the installed version is read from `.venv`, a package not installed from PyPI (git, a
+    URL, a local path or an editable install) is not compared: PyPI may host an unrelated
+    package of the same name. An explicit `--from` skips this rule.
     """
-    old_version = from_version or project.installed_version(project_dir, package)
+    if from_version is None:
+        installed = environment.find_installed(project_dir, package)
+        if installed.origin is not environment.Origin.PYPI:
+            return PackageResult(
+                package, installed.version, to_version, reason=environment.NOT_FROM_PYPI
+            )
+        from_version = installed.version
+    old_version = from_version
     new_version = to_version
     try:
         new_version = new_version or pypi.latest_version(package)
